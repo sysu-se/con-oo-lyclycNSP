@@ -1,0 +1,84 @@
+name: Autograding Tests
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  checks: write
+  actions: read
+  contents: read
+
+jobs:
+  autograding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Contract
+        id: contract
+        uses: education/autograding-command-grader@v1
+        with:
+          test-name: Contract
+          command: npm run test:contract
+          timeout: 5
+          max-score: 10
+
+      - name: Sudoku Basic
+        id: sudoku
+        uses: education/autograding-command-grader@v1
+        with:
+          test-name: Sudoku Basic
+          command: npm run test:sudoku
+          timeout: 5
+          max-score: 20
+
+      - name: Clone
+        id: clone
+        uses: education/autograding-command-grader@v1
+        with:
+          test-name: Clone
+          command: npm run test:clone
+          timeout: 5
+          max-score: 15
+
+      - name: Game Undo Redo
+        id: game
+        uses: education/autograding-command-grader@v1
+        with:
+          test-name: Game Undo Redo
+          command: npm run test:game
+          timeout: 5
+          max-score: 30
+
+      - name: Serialization
+        id: serialization
+        uses: education/autograding-command-grader@v1
+        with:
+          test-name: Serialization
+          command: npm run test:serialization
+          timeout: 5
+          max-score: 25
+
+      - name: Autograding Reporter
+        uses: education/autograding-grading-reporter@v1
+        env:
+          CONTRACT_RESULTS: "${{ steps.contract.outputs.result }}"
+          SUDOKU_RESULTS: "${{ steps.sudoku.outputs.result }}"
+          CLONE_RESULTS: "${{ steps.clone.outputs.result }}"
+          GAME_RESULTS: "${{ steps.game.outputs.result }}"
+          SERIALIZATION_RESULTS: "${{ steps.serialization.outputs.result }}"
+        with:
+          runners: contract,sudoku,clone,game,serialization
