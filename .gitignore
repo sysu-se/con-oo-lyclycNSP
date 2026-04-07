@@ -3,5 +3,7 @@
 
 .DS_Store
 .idea
+.codex
+.vscode/
 tailwind-full.config.js
 pnpm-lock.yaml
