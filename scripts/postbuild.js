@@ -2,6 +2,20 @@ const fs = require('fs');
 const inlineCriticalCss = require('inline-critical');
 const reaver = require('reaver');
 
+const originalWarn = console.warn;
+
+console.warn = (...args) => {
+	const [firstArg] = args;
+	if (
+		typeof firstArg === 'string'
+		&& firstArg.startsWith('postcss-discard: postcss.plugin was deprecated.')
+	) {
+		return;
+	}
+
+	originalWarn(...args);
+};
+
 function throwIfError(err) {
 	if (err) throw err;
 }

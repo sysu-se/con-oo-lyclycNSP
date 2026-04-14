@@ -1,180 +1,229 @@
 # DESIGN
 
-## 1. `Sudoku` / `Game` 的职责边界是什么？
+## 1. 领域对象职责边界
 
-`Sudoku` 只负责“局面”本身：
+### `Sudoku`
 
-- 持有当前 9x9 `grid`
-- 提供 `getGrid()` 读取局面
-- 提供 `guess(move)` 修改一个格子
-- 提供 `clone()` 生成独立副本
-- 提供 `toJSON()` / `toString()` 做序列化和调试外表化
+`Sudoku` 负责表示“当前局面”本身，而不是整局历史：
 
-`Game` 负责“这一局游戏会话”：
+- 持有 `puzzleGrid`（题面固定格）和 `grid`（当前盘面）
+- 提供 `guess(...)` 修改当前局面
+- 通过 `isEditable(...)` 保护题面固定格不被覆盖
+- 提供 `getInvalidCells()` / `isValidMove()` / `isSolved()` 表达数独业务规则
+- 提供 `toJSON()` / `toString()` / `clone()` 做外表化与复制
+
+### `Game`
+
+`Game` 负责表示“一局游戏会话”：
 
 - 持有当前 `Sudoku`
 - 管理 `undoStack` / `redoStack`
 - 提供 `guess()` / `undo()` / `redo()`
-- 提供 `canUndo()` / `canRedo()`
-- 提供 `toJSON()` / `createGameFromJSON()` 保存和恢复整局状态
+- 提供 `getState()`，把当前可供 UI 消费的纯数据导出出来
 
-这样分层后，`Sudoku` 不需要知道历史记录，`Game` 也不直接操作原始二维数组，而是通过 `Sudoku` 完成当前局面的替换和恢复。
+这样拆分后，`Sudoku` 关注业务语义，`Game` 关注状态演进与历史。
 
-## 2. `Move` 是值对象还是实体对象？为什么？
+## 2. 这次对 HW1 的实质改进
 
-`Move` 是值对象。
+这次不是只保留 HW1 的最小可测版本，而是补上了两个关键缺口：
 
-这里的 `Move` 只是：
+1. `Sudoku` 不再只是一个“9x9 数字矩阵包装器”。
+   现在它显式建模了题面固定格，并且能判断哪些格子可编辑、哪些格子冲突、当前局面是否完成。
+
+2. `Game` 不再让 UI 自己拼状态。
+   现在通过 `getState()` 统一导出：
+   - `puzzleGrid`
+   - `grid`
+   - `invalidCells`
+   - `won`
+   - `canUndo`
+   - `canRedo`
+
+这让 View 层真正消费领域对象，而不是继续自己重写规则。
+
+## 3. `Move` 是值对象还是实体对象
+
+`Move` 在这次设计里是值对象，而不是核心实体。
+
+一次输入只由下面三个字段决定：
 
 ```js
 { row, col, value }
 ```
 
-它没有自己的生命周期，也不需要身份标识。两个字段内容完全相同的 `Move`，在业务上就是同一个动作。所以它更适合作为轻量值对象，而不是核心实体对象。
+它没有独立身份，也不需要生命周期管理。两个内容完全相同的 `Move`，在业务上就是同一个输入动作。因此它适合作为轻量值对象传给 `Sudoku.guess(...)` 或 `Game.guess(...)`，而不适合作为需要长期持有的核心领域对象。
 
-## 3. history 中存储的是什么？为什么？
+## 4. history 存储的是什么
 
-我在 `Game` 里存的是 `Sudoku` 快照，而不是单独的 `Move`。
-
-具体来说，`undoStack` / `redoStack` 里存的是：
+`Game` 的历史里存的是 `Sudoku` 快照，而不是单独的 `Move`：
 
 ```js
 {
-  grid: number[][]
+  grid: number[][],
+  puzzleGrid: number[][]
 }
 ```
 
-选择快照有两个原因：
+选择快照而不是 `Move` 的原因：
 
-1. Undo/Redo 实现更直接。撤销时直接恢复到上一个局面，不需要反推“旧值是什么”。
-2. 对当前作业更稳健。后面如果增加“提示”“批量填入”“导入局面”等操作，快照方案不需要重新设计历史结构。
+- Undo/Redo 更直接，恢复一个旧局面即可
+- 历史不会依赖“旧值回推”
+- 即使以后增加 hint、导入局面等操作，也不需要重写历史结构
 
-代价是占用的内存会比只存 `Move` 更大，但本作业每个局面只有 81 个数字，这个代价可以接受。
+代价是快照比 `Move` 占空间，但对于 9x9 数独，这个成本是可接受的。
 
-## 4. 复制策略是什么？哪些地方需要深拷贝？
+## 5. 复制策略与深拷贝
 
-复制策略是：只要数据可能跨对象边界流动，就复制二维数组。
+只要二维数组跨对象边界流动，就做深拷贝：
 
-具体包括：
+- `createSudoku(input)` 时复制输入
+- `getGrid()` / `getPuzzleGrid()` 返回副本
+- `toJSON()` 返回副本
+- `clone()` 通过序列化结果重建
+- `Game` 历史栈保存的是快照副本
 
-- `createSudoku(input)` 时复制输入 `grid`
-- `getGrid()` 返回副本，避免调用方改坏内部状态
-- `clone()` 创建全新的 `Sudoku`
-- `toJSON()` 返回可序列化的副本
-- `Game` 存入历史栈时存快照，而不是存同一个数组引用
+这么做是为了避免共享引用污染：
 
-必须深拷贝的原因是 `grid` 是二维数组。  
-如果只做浅拷贝，例如只复制最外层数组，那么多份 `Sudoku` 可能共享同一行数组。这样修改 clone 或 history 里的一个局面，会污染原对象，Undo/Redo 也会失效。
+- 如果 `grid` 和 `history` 共享同一行数组，Undo/Redo 会失效
+- 如果 View 拿到内部数组并直接改值，领域对象的 invariant 会被绕过
 
-## 5. 序列化 / 反序列化设计是什么？
+## 6. 序列化 / 反序列化设计
 
-`Sudoku.toJSON()` 序列化：
+`Sudoku.toJSON()` 现在会序列化：
 
 ```js
 {
-  grid: number[][]
+  grid: number[][],
+  puzzleGrid: number[][]
 }
 ```
 
-`Game.toJSON()` 序列化：
+`Game.toJSON()` 会序列化：
 
 ```js
 {
-  sudoku: { grid: ... },
-  undoStack: [{ grid: ... }, ...],
-  redoStack: [{ grid: ... }, ...]
+  sudoku: { grid, puzzleGrid },
+  undoStack: [{ grid, puzzleGrid }, ...],
+  redoStack: [{ grid, puzzleGrid }, ...]
 }
 ```
 
-会被序列化的字段：
+其中：
 
-- 当前局面的 `grid`
-- `undoStack`
-- `redoStack`
-
-不会被序列化的字段：
-
-- 方法本身
-- 临时局部变量
+- `grid` 表示当前盘面
+- `puzzleGrid` 表示题面固定格
 
 恢复时：
 
-- `createSudokuFromJSON(json)` 用 `json.grid` 重建 `Sudoku`
-- `createGameFromJSON(json)` 先恢复当前 `Sudoku`，再恢复历史栈中的快照
+- `createSudokuFromJSON(...)` 会校验 `grid` / `puzzleGrid`
+- 还会检查当前盘面是否保留了题面 givens
+- `createGameFromJSON(...)` 会恢复当前局面和历史栈
 
-这样可以保证 round-trip：`serialize -> deserialize` 后对象仍然具备完整方法，而不是只得到普通对象。
+## 7. View 层实际消费的是什么
 
-## 6. 外表化接口是什么？为什么这样设计？
+View 层并不直接持有 `Game` 实例，而是消费一个 Svelte adapter：
 
-我提供了两种外表化：
+- 位置：[src/node_modules/@sudoku/stores/grid.js](/home/lyclyc/workspace/con-oo-lyclycNSP/src/node_modules/@sudoku/stores/grid.js)
+- 核心方式：闭包里持有 `currentGame`
 
-1. `toJSON()`
-2. `toString()`
+这个 adapter 对外暴露两类东西：
 
-`Sudoku.toString()` 会把 0 显示成 `.`，输出为便于阅读的 9 行文本，例如：
+### 响应式状态
 
-```txt
-5 3 . . 7 . . . .
-6 . . 1 9 5 . . .
-. 9 8 . . . . 6 .
-...
+- `grid`：题面固定格
+- `userGrid`：当前盘面
+- `invalidCells`
+- `canUndo`
+- `canRedo`
+- `won`
+
+### 命令
+
+- `generate(...)`
+- `decodeSencode(...)`
+- `set(...)`
+- `applyHint(...)`
+- `undo()`
+- `redo()`
+
+组件只负责：
+
+- 渲染这些状态
+- 在点击/键盘事件中调用这些命令
+
+关键逻辑不再散落在 `.svelte` 文件里。
+
+## 8. Svelte 为什么会更新
+
+这次接入依赖的是 Svelte 3 的 store 机制，而不是对象字段自动追踪。
+
+`grid.js` 内部会维护：
+
+1. 一个真正的领域对象 `currentGame`
+2. 一个 Svelte `state` store，里面保存 `currentGame.getState()` 导出的纯数据
+
+当用户输入、撤销、重做时：
+
+1. 先调用 `currentGame.guess()` / `undo()` / `redo()`
+2. 再调用 `state.set(currentGame.getState())`
+3. Svelte 看到 store 被 `set(...)`，于是刷新 `$grid`、`$userGrid`、`$gameCanUndo` 等订阅值
+
+所以 UI 更新的根本原因不是“对象内部字段变了”，而是“store 被重新 set 了新的纯数据状态”。
+
+## 9. 为什么不能直接 mutate 领域对象给 UI 用
+
+如果只写：
+
+```js
+currentGame.guess(...)
 ```
 
-这样在调试时能直接看出当前局面，而不是得到 `[object Object]`。
+但不调用 `state.set(...)`，那么 Svelte 组件并不会知道 `currentGame` 内部字段已经变化，因为：
 
-`Game.toString()` 则额外输出：
+- Svelte 3 不会自动追踪普通对象内部属性
+- `$store` 只会对 store 的 `set/update` 产生响应
 
-- 当前 `undo` 数量
-- 当前 `redo` 数量
-- 当前 `Sudoku` 的文本表示
+同理，直接改二维数组元素也有风险：
 
-这样调试 Undo/Redo 时更直观。
+- 可能绕过 `Sudoku` 的固定格保护
+- 可能绕过领域层的 invariant
+- 可能让 reactive statement 或 derived store 得到不一致状态
 
-## 7. UI 层是如何接入领域对象的？
+所以这次方案要求：
 
-为了满足“关键逻辑不散落在组件代码中”，我没有让 Svelte 组件直接操作二维数组，而是让现有 store 调用领域对象：
+- 领域对象负责业务规则
+- adapter 负责把领域状态转成 store
+- 组件只消费 store，不直接 mutate 领域对象内部数组
 
-- `src/node_modules/@sudoku/stores/grid.js`
-  - 持有当前 `Game`
-  - 输入数字时调用 `game.guess(...)`
-  - Undo/Redo 按钮调用 `game.undo()` / `game.redo()`
-  - 再把结果同步回 Svelte store 用于渲染
+## 10. 新设计的 trade-off
 
-这样 UI 只负责事件转发和显示，领域逻辑仍然集中在 `src/domain/index.js`。
+这次设计的主要 trade-off 有三点：
 
-## 8. 加分项完成情况
+1. history 选择快照而不是 `Move`
+   优点是 Undo/Redo 和序列化恢复都更直接；代价是内存占用比只存 `Move` 更高。
 
-本次实现实际覆盖了 3 个加分方向：
+2. UI 不直接消费领域对象，而是多了一层 Svelte adapter
+   优点是领域层可以保持框架无关，Svelte 响应式边界也更清楚；代价是需要维护一层状态投影代码。
 
-### 8.1 更清晰的调试表示
+3. `Sudoku` 负责固定格与冲突校验
+   优点是业务规则更内聚；代价是对象职责比 HW1 更重，但仍然处在“局面对象”合理边界内，没有把历史逻辑也塞进去。
 
-`Sudoku.toString()` 会把当前局面格式化为 9 行文本，并把空格显示为 `.`。  
-`Game.toString()` 会在此基础上额外输出 `undo` / `redo` 的长度，便于调试历史状态。
+## 11. 关键文件
 
-### 8.2 更完整的 round-trip 测试
+- [src/domain/index.js](/home/lyclyc/workspace/con-oo-lyclycNSP/src/domain/index.js)
+  领域对象实现，包含 `Sudoku` / `Game`
 
-除了课程给定测试外，我还补充了一个额外测试：
+- [src/node_modules/@sudoku/stores/grid.js](/home/lyclyc/workspace/con-oo-lyclycNSP/src/node_modules/@sudoku/stores/grid.js)
+  Svelte adapter，负责把领域对象接入真实 UI 流程
 
-- `tests/hw1/06-extra-roundtrip.test.js`
+- [src/node_modules/@sudoku/stores/game.js](/home/lyclyc/workspace/con-oo-lyclycNSP/src/node_modules/@sudoku/stores/game.js)
+  暴露 `gamePaused`、`gameCanUndo`、`gameCanRedo`、`gameWon`
 
-这个测试验证的不只是“当前棋盘能恢复”，还验证了：
+- [src/components/Board/index.svelte](/home/lyclyc/workspace/con-oo-lyclycNSP/src/components/Board/index.svelte)
+  消费 `grid` / `userGrid` / `invalidCells`
 
-- `Game` 序列化后恢复时，`undoStack` / `redoStack` 也能恢复
-- 恢复后的对象仍然可以继续 `undo()` / `redo()`
-- `toString()` 在恢复后仍然可用
+- [src/components/Controls/Keyboard.svelte](/home/lyclyc/workspace/con-oo-lyclycNSP/src/components/Controls/Keyboard.svelte)
+  通过 `userGrid.set(...)` 将输入转给领域对象
 
-### 8.3 更优雅的 history 结构
-
-history 使用的是“快照双栈”结构：
-
-- `undoStack`
-- `redoStack`
-
-每次 `guess()`：
-
-1. 把当前局面快照压入 `undoStack`
-2. 清空 `redoStack`
-3. 修改当前 `Sudoku`
-
-每次 `undo()` / `redo()` 都是在两条栈之间移动当前局面的快照。  
-这个结构的优点是规则简单、行为稳定，而且非常适合当前作业规模。
+- [src/components/Controls/ActionBar/Actions.svelte](/home/lyclyc/workspace/con-oo-lyclycNSP/src/components/Controls/ActionBar/Actions.svelte)
+  通过 `game.undo()` / `game.redo()` 调用领域层历史逻辑

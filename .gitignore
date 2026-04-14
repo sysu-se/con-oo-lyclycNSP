@@ -2,8 +2,11 @@
 /dist/
 
 .DS_Store
+*.Zone.Identifier
 .idea
 .codex
 .vscode/
 tailwind-full.config.js
 pnpm-lock.yaml
+codex-review.md
+作业要求1.md
